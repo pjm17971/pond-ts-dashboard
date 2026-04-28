@@ -9,7 +9,13 @@ import {
   YAxis,
 } from 'recharts';
 
-export type ChartPoint = { ts: number; value: number };
+/**
+ * A single time-stamped point.
+ * `value` may be `undefined` to denote a gap — Recharts skips these
+ * when the line/area has `connectNulls={false}`, producing a visible
+ * break in the chart instead of a line drawn across the gap.
+ */
+export type ChartPoint = { ts: number; value: number | undefined };
 
 export type ChartSeries = {
   name: string;
@@ -122,6 +128,7 @@ export function Chart({
   let minY = Infinity;
   let maxY = -Infinity;
   for (const v of allValues) {
+    if (v == null) continue;
     if (v < minY) minY = v;
     if (v > maxY) maxY = v;
   }
@@ -195,7 +202,9 @@ export function Chart({
               strokeOpacity={s.opacity ?? (s.dashed ? 0.7 : 0.95)}
               dot={false}
               isAnimationActive={false}
-              connectNulls
+              // Don't bridge gaps in the data — undefined values render
+              // as breaks (matches the band Area's behaviour).
+              connectNulls={false}
             />
           ))}
           {dots.map((d) => (

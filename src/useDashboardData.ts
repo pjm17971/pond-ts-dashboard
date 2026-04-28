@@ -179,8 +179,20 @@ export function useDashboardData(args: DashboardArgs): DashboardData {
     const allAnomalies: ChartPoint[] = [];
     if (!timeSeries) return { series, bands, dots, allAnomalies };
 
+    // Pipeline notes:
+    //   - `materialize(every 500ms)` regularises each host's events onto a
+    //     fixed grid. Empty buckets get `cpu: undefined`, which propagates
+    //     through `baseline` so its avg/sd/upper/lower are also undefined
+    //     wherever there's no source data. Combined with
+    //     `connectNulls={false}` on the chart, that renders as a visible
+    //     break instead of a line drawn across the gap.
+    //   - `partitionBy('host').materialize(...)` is the partition-aware
+    //     overload — it auto-populates the `host` column on the empty rows
+    //     it inserts, which the bare `TimeSeries.materialize` would leave
+    //     undefined.
     const perHostRows = timeSeries
       .partitionBy('host')
+      .materialize(Sequence.every('500ms'))
       .baseline('cpu', { window: '1m', sigma })
       .toMap((g) => g.toPoints());
 
@@ -197,14 +209,17 @@ export function useDashboardData(args: DashboardArgs): DashboardData {
       const smoothPoints: ChartPoint[] = [];
       let lastAvg: number | undefined;
 
+      // Push a point at every materialized timestamp — including the
+      // ones where `cpu` / `avg` / etc. are undefined (gap cells). The
+      // chart's `connectNulls={false}` then renders the gap as a break.
+      // Without this, we'd silently skip the gap timestamps and the
+      // line would draw across them.
       for (const r of rows) {
-        if (r.cpu != null) rawPoints.push({ ts: r.ts, value: r.cpu });
-        if (r.avg != null) {
-          smoothPoints.push({ ts: r.ts, value: r.avg });
-          lastAvg = r.avg;
-        }
-        if (r.upper != null) upper.push({ ts: r.ts, value: r.upper });
-        if (r.lower != null) lower.push({ ts: r.ts, value: r.lower });
+        rawPoints.push({ ts: r.ts, value: r.cpu });
+        smoothPoints.push({ ts: r.ts, value: r.avg });
+        if (r.avg != null) lastAvg = r.avg;
+        upper.push({ ts: r.ts, value: r.upper });
+        lower.push({ ts: r.ts, value: r.lower });
         if (
           r.cpu != null &&
           r.upper != null &&
