@@ -179,33 +179,20 @@ export function useDashboardData(args: DashboardArgs): DashboardData {
     const allAnomalies: ChartPoint[] = [];
     if (!timeSeries) return { series, bands, dots, allAnomalies };
 
-    // Pipeline notes:
-    //   - `materialize(every 500ms)` regularises each host's events onto a
-    //     fixed grid. Empty buckets get `cpu: undefined`, which propagates
-    //     through `baseline` so its avg/sd/upper/lower are also undefined
-    //     wherever there's no source data. Combined with
-    //     `connectNulls={false}` on the chart, that renders as a visible
-    //     break instead of a line drawn across the gap.
-    //   - `partitionBy('host').materialize(...)` is the partition-aware
-    //     overload — it auto-populates the `host` column on the empty rows
-    //     it inserts, which the bare `TimeSeries.materialize` would leave
-    //     undefined.
+    // `minSamples` (0.11.2) gates baseline output: rows whose 1-min
+    // window has fewer than 30 source events emit `undefined` for
+    // avg/sd/upper/lower. That kills the staircase artefact during
+    // throttled-tab periods (sparse events, inflated rolling avg from a
+    // tiny sample) and the post-resume warm-up.
+    //
+    // Note: this counts source events directly. We deliberately don't
+    // run `materialize` upstream — that would inflate the window's
+    // event count with synthetic empty cells and the gate would never
+    // fire. Source events in / source events counted out.
     const perHostRows = timeSeries
       .partitionBy('host')
-      .materialize(Sequence.every('500ms'))
-      .baseline('cpu', { window: '1m', sigma })
+      .baseline('cpu', { window: '1m', sigma, minSamples: 30 })
       .toMap((g) => g.toPoints());
-
-    // Stand-in for `minSamples` until pond-ts gates rolling output on
-    // defined-sample count. Without it, baseline keeps emitting an avg
-    // computed from very few materialized cells in the trailing 1-min
-    // window — producing the long flat "staircase" sections that show
-    // up after the simulator is throttled (background tab) and resumes
-    // sparse data. With it, sparse regions emit undefined avg/sd/upper/
-    // lower, the chart's `connectNulls={false}` shows breaks there, and
-    // the paired Scatter renders any isolated defined cells.
-    const MIN_SAMPLES = 30;
-    const ROLLING_MS = 60_000;
 
     for (const host of hosts) {
       if (!enabledHosts.has(host)) continue;
@@ -220,40 +207,21 @@ export function useDashboardData(args: DashboardArgs): DashboardData {
       const smoothPoints: ChartPoint[] = [];
       let lastAvg: number | undefined;
 
-      // Two-pointer sliding window: at each row `i`, `definedCount` is
-      // the number of rows in (rows[i].ts - 60s .. rows[i].ts] whose
-      // `cpu` value is defined.
-      let left = 0;
-      let definedCount = 0;
-
-      // Push a point at every materialized timestamp — including the
-      // ones where `cpu` / `avg` / etc. are undefined (gap cells), so
-      // the chart's `connectNulls={false}` renders the gap as a break.
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i];
-        if (r.cpu != null) definedCount++;
-        while (left < i && rows[left].ts < r.ts - ROLLING_MS) {
-          if (rows[left].cpu != null) definedCount--;
-          left++;
-        }
-        // Below threshold → mask the rolling outputs. Raw `cpu` is
-        // unaffected so the optional raw-samples overlay still shows
-        // the underlying points.
-        const reliable = definedCount >= MIN_SAMPLES;
-        const avg = reliable ? r.avg : undefined;
-        const hi = reliable ? r.upper : undefined;
-        const lo = reliable ? r.lower : undefined;
-
+      // Library `minSamples` (above) already nulls out avg/sd/upper/
+      // lower wherever the window is too sparse. Pushing every row —
+      // including ones whose rolling outputs are undefined — keeps
+      // those gaps visible in the chart via `connectNulls={false}`.
+      for (const r of rows) {
         rawPoints.push({ ts: r.ts, value: r.cpu });
-        smoothPoints.push({ ts: r.ts, value: avg });
-        if (avg != null) lastAvg = avg;
-        upper.push({ ts: r.ts, value: hi });
-        lower.push({ ts: r.ts, value: lo });
+        smoothPoints.push({ ts: r.ts, value: r.avg });
+        if (r.avg != null) lastAvg = r.avg;
+        upper.push({ ts: r.ts, value: r.upper });
+        lower.push({ ts: r.ts, value: r.lower });
         if (
           r.cpu != null &&
-          hi != null &&
-          lo != null &&
-          (r.cpu > hi || r.cpu < lo)
+          r.upper != null &&
+          r.lower != null &&
+          (r.cpu > r.upper || r.cpu < r.lower)
         ) {
           anomalies.push({ ts: r.ts, value: r.cpu });
         }
