@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import {
   Area,
   CartesianGrid,
@@ -191,22 +192,54 @@ export function Chart({
               activeDot={false}
             />
           ))}
-          {series.map((s) => (
-            <Line
-              key={s.name}
-              type="monotone"
-              dataKey={s.name}
-              stroke={s.color}
-              strokeWidth={s.width ?? 1.5}
-              strokeDasharray={s.dashed ? '4 3' : undefined}
-              strokeOpacity={s.opacity ?? (s.dashed ? 0.7 : 0.95)}
-              dot={false}
-              isAnimationActive={false}
-              // Don't bridge gaps in the data — undefined values render
-              // as breaks (matches the band Area's behaviour).
-              connectNulls={false}
-            />
-          ))}
+          {series.map((s) => {
+            // Pair the line with a small Scatter overlay for "real" data
+            // series (skip dashed reference lines and hidden raw overlays).
+            // Recharts' Line can't render an isolated defined value with
+            // `connectNulls={false}` — there's no segment to draw — so
+            // a sparse stretch of one-defined-then-undefined points would
+            // visually disappear entirely. The Scatter renders a marker
+            // at every defined value; in dense regions the dot overlaps
+            // the line and reads as a slightly thicker stroke, in sparse
+            // regions it's the only thing that shows the data exists.
+            const showDots = !s.dashed && !s.hideFromLegend;
+            const lineOpacity = s.opacity ?? (s.dashed ? 0.7 : 0.95);
+            return (
+              <Fragment key={s.name}>
+                <Line
+                  type="monotone"
+                  dataKey={s.name}
+                  stroke={s.color}
+                  strokeWidth={s.width ?? 1.5}
+                  strokeDasharray={s.dashed ? '4 3' : undefined}
+                  strokeOpacity={lineOpacity}
+                  dot={false}
+                  isAnimationActive={false}
+                  connectNulls={false}
+                />
+                {showDots && (
+                  <Scatter
+                    dataKey={s.name}
+                    fill={s.color}
+                    fillOpacity={lineOpacity}
+                    shape={(props: { cx?: number; cy?: number }) =>
+                      props.cx == null || props.cy == null ? (
+                        <g />
+                      ) : (
+                        <circle
+                          cx={props.cx}
+                          cy={props.cy}
+                          r={1.5}
+                          fill={s.color}
+                        />
+                      )
+                    }
+                    isAnimationActive={false}
+                  />
+                )}
+              </Fragment>
+            );
+          })}
           {dots.map((d) => (
             <Scatter
               key={`dots-${d.name}`}
