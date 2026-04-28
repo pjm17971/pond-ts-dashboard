@@ -166,9 +166,10 @@ export function useDashboardData(args: DashboardArgs): DashboardData {
   //      partitionBy('host')                       ← scope per-host
   //        .baseline('cpu', { window, sigma })     ← single rolling pass,
   //                                                  appends avg/sd/upper/lower
-  //        .collect()                              ← back to TimeSeries
-  //        .groupBy('host', g => g.toPoints())     ← Map<host, wide rows>
+  //        .toMap(g => g.toPoints())               ← Map<host, wide rows>
   //
+  //    `toMap(fn)` runs `fn` per partition and returns the result map
+  //    directly — no `.collect()` round-trip, no extra `groupBy` pass.
   //    Each host's rows already have every column we need; the local
   //    loop just splits them into the chart's per-purpose arrays.
   const cpu = useMemo(() => {
@@ -181,8 +182,7 @@ export function useDashboardData(args: DashboardArgs): DashboardData {
     const perHostRows = timeSeries
       .partitionBy('host')
       .baseline('cpu', { window: '1m', sigma })
-      .collect()
-      .groupBy('host', (g) => g.toPoints());
+      .toMap((g) => g.toPoints());
 
     for (const host of hosts) {
       if (!enabledHosts.has(host)) continue;

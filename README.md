@@ -133,8 +133,7 @@ Almost every real dashboard has a categorical column — host, region, user, cha
 const perHostBaselines = timeSeries
   .partitionBy('host')
   .baseline('cpu', { window: '1m', sigma: 2 })   // appends avg/sd/upper/lower per row
-  .collect()
-  .groupBy('host', (g) => g.toPoints());
+  .toMap((g) => g.toPoints());
 // Map<host, Array<{ ts, cpu, requests, avg, sd, upper, lower }>>
 ```
 
@@ -142,7 +141,7 @@ This is the workhorse pattern in the dashboard's CPU section ([useDashboardData.
 
 1. **`partitionBy` keeps the rolling baseline scoped per host.** Without it, `baseline('cpu', { window: '1m' })` would average across hosts in the window — silently wrong, easy to miss in dev, broken at the visualization layer.
 2. **`baseline` is one rolling pass that produces four columns** (`avg`, `sd`, `upper`, `lower`) on every event. The bands and the outlier predicate read from the same row data; no second rolling pass.
-3. **`groupBy('host', g => g.toPoints())` returns wide-row arrays** — `[{ ts, cpu, avg, upper, lower, ... }]` — one per host, ready for a chart library to consume.
+3. **`toMap(g => g.toPoints())` returns wide-row arrays** — `[{ ts, cpu, avg, upper, lower, ... }]` — one per host, ready for a chart library to consume. (Earlier pond versions used `.collect().groupBy(col, fn)` for the same shape; on v0.10+ prefer `toMap` — it skips the unified-buffer round-trip.)
 
 ### Anomaly detection falls out for free
 
@@ -235,7 +234,7 @@ Skim these by section if you want to see how a specific bit is wired:
 - **Multi-reducer rollups** — `useCurrent(live, { requests: 'sum', cpu: 'avg' })` — a single subscription, multiple reductions, reference-stable return. (step 5)
 - **Bucketed counts** — `aggregate(Sequence.every('15s'), { col: 'count' })` for the alert/anomaly bar chart. (step 12)
 - **Smooth + slice for warmup** — EMA smoothing with `.slice(12)` to drop the warmup samples that haven't fully converged yet. (step 13)
-- **`groupBy` with a transform** — when you want per-host *snapshots* rather than a fan-in, `partitionBy(...).toMap(g => g.transform())` returns `Map<group, R>`. Used for per-host smoothed request lines. (step 13)
+- **`partitionBy(...).toMap(transform)`** — when you want per-host *snapshots* rather than a fan-in, this returns `Map<group, R>` directly. The same pattern shows up in the CPU section (step 7) and the requests section (step 13).
 
 ---
 
