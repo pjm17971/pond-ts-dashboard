@@ -194,7 +194,7 @@ export function Chart({
           ))}
           {series.map((s) => {
             // Pair the line with a small Scatter overlay for "real" data
-            // series (skip dashed reference lines and hidden raw overlays).
+            // series (skip only dashed reference lines).
             // Recharts' Line can't render an isolated defined value with
             // `connectNulls={false}` — there's no segment to draw — so
             // a sparse stretch of one-defined-then-undefined points would
@@ -202,7 +202,11 @@ export function Chart({
             // at every defined value; in dense regions the dot overlaps
             // the line and reads as a slightly thicker stroke, in sparse
             // regions it's the only thing that shows the data exists.
-            const showDots = !s.dashed && !s.hideFromLegend;
+            // Raw-sample overlays in particular need the scatter — the
+            // materialized grid alternates defined/undefined cells when
+            // the source rate is below the grid step (e.g., during a
+            // backgrounded-tab throttle), so most raw points are isolated.
+            const showDots = !s.dashed;
             const lineOpacity = s.opacity ?? (s.dashed ? 0.7 : 0.95);
             return (
               <Fragment key={s.name}>

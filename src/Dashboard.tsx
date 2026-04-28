@@ -29,7 +29,11 @@ export function Dashboard() {
   });
   const [chartOpts, setChartOpts] = useState<ChartOpts>({
     showBands: true,
-    showRaw: false,
+    // Show raw samples by default — the most direct visual signal of
+    // "data is flowing right now". When the source pauses, the raw line
+    // breaks immediately at the next undefined cell; the smoothed line
+    // can lag because its rolling window still contains pre-pause data.
+    showRaw: true,
     sigma: 2,
     eventsPerSec: 2,
   });
