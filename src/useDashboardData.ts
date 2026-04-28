@@ -196,6 +196,17 @@ export function useDashboardData(args: DashboardArgs): DashboardData {
       .baseline('cpu', { window: '1m', sigma })
       .toMap((g) => g.toPoints());
 
+    // Stand-in for `minSamples` until pond-ts gates rolling output on
+    // defined-sample count. Without it, baseline keeps emitting an avg
+    // computed from very few materialized cells in the trailing 1-min
+    // window — producing the long flat "staircase" sections that show
+    // up after the simulator is throttled (background tab) and resumes
+    // sparse data. With it, sparse regions emit undefined avg/sd/upper/
+    // lower, the chart's `connectNulls={false}` shows breaks there, and
+    // the paired Scatter renders any isolated defined cells.
+    const MIN_SAMPLES = 30;
+    const ROLLING_MS = 60_000;
+
     for (const host of hosts) {
       if (!enabledHosts.has(host)) continue;
       const rows = perHostRows.get(host);
@@ -209,22 +220,40 @@ export function useDashboardData(args: DashboardArgs): DashboardData {
       const smoothPoints: ChartPoint[] = [];
       let lastAvg: number | undefined;
 
+      // Two-pointer sliding window: at each row `i`, `definedCount` is
+      // the number of rows in (rows[i].ts - 60s .. rows[i].ts] whose
+      // `cpu` value is defined.
+      let left = 0;
+      let definedCount = 0;
+
       // Push a point at every materialized timestamp — including the
-      // ones where `cpu` / `avg` / etc. are undefined (gap cells). The
-      // chart's `connectNulls={false}` then renders the gap as a break.
-      // Without this, we'd silently skip the gap timestamps and the
-      // line would draw across them.
-      for (const r of rows) {
+      // ones where `cpu` / `avg` / etc. are undefined (gap cells), so
+      // the chart's `connectNulls={false}` renders the gap as a break.
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        if (r.cpu != null) definedCount++;
+        while (left < i && rows[left].ts < r.ts - ROLLING_MS) {
+          if (rows[left].cpu != null) definedCount--;
+          left++;
+        }
+        // Below threshold → mask the rolling outputs. Raw `cpu` is
+        // unaffected so the optional raw-samples overlay still shows
+        // the underlying points.
+        const reliable = definedCount >= MIN_SAMPLES;
+        const avg = reliable ? r.avg : undefined;
+        const hi = reliable ? r.upper : undefined;
+        const lo = reliable ? r.lower : undefined;
+
         rawPoints.push({ ts: r.ts, value: r.cpu });
-        smoothPoints.push({ ts: r.ts, value: r.avg });
-        if (r.avg != null) lastAvg = r.avg;
-        upper.push({ ts: r.ts, value: r.upper });
-        lower.push({ ts: r.ts, value: r.lower });
+        smoothPoints.push({ ts: r.ts, value: avg });
+        if (avg != null) lastAvg = avg;
+        upper.push({ ts: r.ts, value: hi });
+        lower.push({ ts: r.ts, value: lo });
         if (
           r.cpu != null &&
-          r.upper != null &&
-          r.lower != null &&
-          (r.cpu > r.upper || r.cpu < r.lower)
+          hi != null &&
+          lo != null &&
+          (r.cpu > hi || r.cpu < lo)
         ) {
           anomalies.push({ ts: r.ts, value: r.cpu });
         }
